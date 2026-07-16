@@ -50,7 +50,7 @@ Linux (A53) komutu gönderdikten sonra kendi işine döner; motoru, R5F üzerind
 
 ---
 
-## Neden (Asymmetric Multi-Processing) AMP ?
+## Neden (Asimetrik Çoklu İşleme) AMP ?
 
 Bu projeye başlarken aklımdaki soru şuydu:
 
