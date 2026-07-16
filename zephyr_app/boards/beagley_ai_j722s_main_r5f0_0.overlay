@@ -9,13 +9,25 @@
 		};
 	};
 
+	motor_pins {
+		compatible = "gpio-leds";
+		motor_in1: in1 { gpios = <&main_gpio1_0  8 GPIO_ACTIVE_HIGH>; };
+		motor_in2: in2 { gpios = <&main_gpio1_0 15 GPIO_ACTIVE_HIGH>; };
+		motor_in3: in3 { gpios = <&main_gpio1_0  7 GPIO_ACTIVE_HIGH>; };
+		motor_in4: in4 { gpios = <&main_gpio1_0 12 GPIO_ACTIVE_HIGH>; };
+	};
+
 	aliases {
 		led0 = &user_led;
+		mtr1 = &motor_in1;
+		mtr2 = &motor_in2;
+		mtr3 = &motor_in3;
+		mtr4 = &motor_in4;
 	};
 };
 
 &main_gpio1_0 {
 	status = "okay";
-	pinctrl-0 = <&hat_31_gpio>;
+	pinctrl-0 = <&hat_31_gpio &hat_11_gpio &hat_29_gpio &hat_36_gpio &hat_35_gpio>;
 	pinctrl-names = "default";
 };

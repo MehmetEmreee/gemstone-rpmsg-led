@@ -25,6 +25,18 @@
 #include <zephyr/drivers/gpio.h>
 #include "ipc_proto.h"
 
+#define MTR1_NODE DT_ALIAS(mtr1)
+#define MTR2_NODE DT_ALIAS(mtr2)
+#define MTR3_NODE DT_ALIAS(mtr3)
+#define MTR4_NODE DT_ALIAS(mtr4)
+
+static const struct gpio_dt_spec mtr[4] = {
+	GPIO_DT_SPEC_GET(MTR1_NODE, gpios),
+	GPIO_DT_SPEC_GET(MTR2_NODE, gpios),
+	GPIO_DT_SPEC_GET(MTR3_NODE, gpios),
+	GPIO_DT_SPEC_GET(MTR4_NODE, gpios),
+};
+
 #define LED0_NODE DT_ALIAS(led0)
 static const struct gpio_dt_spec led = GPIO_DT_SPEC_GET(LED0_NODE, gpios);
 
@@ -96,6 +108,69 @@ static void platform_ipm_callback(const struct device *dev, void *context,
 }
 
 /* ---------------- Komut isleyicileri ---------------- */
+/* ---------------- Step motor (28BYJ-48, half-step) ---------------- */
+
+/* IN1 IN2 IN3 IN4 */
+static const uint8_t half_step[8][4] = {
+	{1,0,0,0},
+	{1,1,0,0},
+	{0,1,0,0},
+	{0,1,1,0},
+	{0,0,1,0},
+	{0,0,1,1},
+	{0,0,0,1},
+	{1,0,0,1},
+};
+
+#define MOTOR_STACK_SIZE 1024
+K_THREAD_STACK_DEFINE(motor_stack, MOTOR_STACK_SIZE);
+static struct k_thread motor_thread_data;
+
+static K_SEM_DEFINE(motor_sem, 0, 1);
+
+static volatile int32_t  motor_target;      /* kalan adim (isaretli) */
+static volatile int32_t  motor_position;    /* toplam pozisyon */
+static volatile uint32_t motor_delay_us = 2000;
+static volatile bool     motor_stop_req;
+static uint8_t           phase_idx;
+
+static void motor_apply(uint8_t idx)
+{
+	for (int i = 0; i < 4; i++)
+		gpio_pin_set_dt(&mtr[i], half_step[idx][i]);
+}
+
+static void motor_release(void)
+{
+	for (int i = 0; i < 4; i++)
+		gpio_pin_set_dt(&mtr[i], 0);
+}
+
+static void motor_thread(void *a, void *b, void *c)
+{
+	ARG_UNUSED(a); ARG_UNUSED(b); ARG_UNUSED(c);
+
+	while (1) {
+		k_sem_take(&motor_sem, K_FOREVER);
+
+		while (motor_target != 0 && !motor_stop_req) {
+			int dir = (motor_target > 0) ? 1 : -1;
+
+			phase_idx = (phase_idx + (dir > 0 ? 1 : 7)) % 8;
+			motor_apply(phase_idx);
+
+			motor_position += dir;
+			motor_target   -= dir;
+
+			k_usleep(motor_delay_us);
+		}
+
+		motor_release();          /* bosta akim cekmesin, isinmasin */
+		motor_stop_req = false;
+		LOG_INF("motor durdu, pozisyon=%d", motor_position);
+	}
+}
+
 
 static int handle_ping(const struct ipc_cmd *cmd, struct ipc_resp *resp)
 {
@@ -124,6 +199,43 @@ static int handle_led_get(const struct ipc_cmd *cmd, struct ipc_resp *resp)
 	return RESP_OK;
 }
 
+static int handle_motor_step(const struct ipc_cmd *cmd, struct ipc_resp *resp)
+{
+	motor_stop_req = false;
+	motor_target   = cmd->value;
+	resp->value    = motor_position;
+	k_sem_give(&motor_sem);
+	LOG_INF("motor: %d adim", cmd->value);
+	return RESP_OK;
+}
+
+static int handle_motor_stop(const struct ipc_cmd *cmd, struct ipc_resp *resp)
+{
+	ARG_UNUSED(cmd);
+	motor_stop_req = true;
+	motor_target   = 0;
+	resp->value    = motor_position;
+	return RESP_OK;
+}
+
+static int handle_motor_get(const struct ipc_cmd *cmd, struct ipc_resp *resp)
+{
+	ARG_UNUSED(cmd);
+	resp->value = motor_position;
+	return RESP_OK;
+}
+
+static int handle_motor_spd(const struct ipc_cmd *cmd, struct ipc_resp *resp)
+{
+	if (cmd->value < 1000 || cmd->value > 100000)
+		return RESP_ERR_VALUE;
+
+	motor_delay_us = cmd->value;
+	resp->value    = cmd->value;
+	LOG_INF("motor hizi: %d us/adim", cmd->value);
+	return RESP_OK;
+}
+
 /* ---------------- Komut tablosu ---------------- */
 
 struct cmd_entry {
@@ -132,9 +244,13 @@ struct cmd_entry {
 };
 
 static const struct cmd_entry cmd_table[] = {
-	{ CMD_PING,    handle_ping    },
-	{ CMD_LED_SET, handle_led_set },
-	{ CMD_LED_GET, handle_led_get },
+	{ CMD_PING,       handle_ping       },
+	{ CMD_LED_SET,    handle_led_set    },
+	{ CMD_LED_GET,    handle_led_get    },
+	{ CMD_MOTOR_STEP, handle_motor_step },
+	{ CMD_MOTOR_STOP, handle_motor_stop },
+	{ CMD_MOTOR_GET,  handle_motor_get  },
+	{ CMD_MOTOR_SPD,  handle_motor_spd  },
 };
 
 static int dispatch(const struct ipc_cmd *cmd, struct ipc_resp *resp)
@@ -432,6 +548,19 @@ int main(void)
 	} else {
 		LOG_ERR("LED cihazi hazir DEGIL");
 	}
+
+	for (int i = 0; i < 4; i++) {
+		if (!gpio_is_ready_dt(&mtr[i])) {
+			LOG_ERR("motor pin %d hazir DEGIL", i);
+		} else {
+			gpio_pin_configure_dt(&mtr[i], GPIO_OUTPUT_INACTIVE);
+		}
+	}
+	LOG_INF("motor pinleri hazir");
+
+	k_thread_create(&motor_thread_data, motor_stack, MOTOR_STACK_SIZE,
+			motor_thread, NULL, NULL, NULL,
+			K_PRIO_COOP(5), 0, K_NO_WAIT);
 
 	k_thread_create(&thread_mng_data, thread_mng_stack, APP_TASK_STACK_SIZE,
 			rpmsg_mng_task,
