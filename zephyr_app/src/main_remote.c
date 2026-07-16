@@ -23,6 +23,7 @@
 #endif
 
 #include <zephyr/drivers/gpio.h>
+#include "ipc_proto.h"
 
 #define LED0_NODE DT_ALIAS(led0)
 static const struct gpio_dt_spec led = GPIO_DT_SPEC_GET(LED0_NODE, gpios);
@@ -37,20 +38,16 @@ LOG_MODULE_REGISTER(openamp_rsc_table);
 #endif
 
 #if CONFIG_IPM_MAX_DATA_SIZE > 0
-
 #define	IPM_SEND(dev, w, id, d, s) ipm_send(dev, w, id, d, s)
 #else
 #define IPM_SEND(dev, w, id, d, s) ipm_send(dev, w, id, NULL, 0)
 #endif
 
-/* Constants derived from device tree */
 #define SHM_NODE		DT_CHOSEN(zephyr_ipc_shm)
 #define SHM_START_ADDR	DT_REG_ADDR(SHM_NODE)
 #define SHM_SIZE		DT_REG_SIZE(SHM_NODE)
 
 #define APP_TASK_STACK_SIZE (1024)
-
-/* Add 1024 extra bytes for the TTY task stack for the "tx_buff" buffer. */
 #define APP_TTY_TASK_STACK_SIZE (1536)
 
 K_THREAD_STACK_DEFINE(thread_mng_stack, APP_TASK_STACK_SIZE);
@@ -67,8 +64,8 @@ static const struct device *const ipm_handle =
 static metal_phys_addr_t shm_physmap = SHM_START_ADDR;
 static metal_phys_addr_t rsc_tab_physmap;
 
-static struct metal_io_region shm_io_data; /* shared memory */
-static struct metal_io_region rsc_io_data; /* rsc_table memory */
+static struct metal_io_region shm_io_data;
+static struct metal_io_region rsc_io_data;
 
 struct rpmsg_rcv_msg {
 	void *data;
@@ -76,16 +73,13 @@ struct rpmsg_rcv_msg {
 };
 
 static struct metal_io_region *shm_io = &shm_io_data;
-
 static struct metal_io_region *rsc_io = &rsc_io_data;
 static struct rpmsg_virtio_device rvdev;
 
 static void *rsc_table;
 static struct rpmsg_device *rpdev;
 
-static char rx_sc_msg[20];  /* should receive "Hello world!" */
 static struct rpmsg_endpoint sc_ept;
-static struct rpmsg_rcv_msg sc_msg = {.data = rx_sc_msg};
 
 static struct rpmsg_endpoint tty_ept;
 static struct rpmsg_rcv_msg tty_msg;
@@ -101,22 +95,84 @@ static void platform_ipm_callback(const struct device *dev, void *context,
 	k_sem_give(&data_sem);
 }
 
+/* ---------------- Komut isleyicileri ---------------- */
+
+static int handle_ping(const struct ipc_cmd *cmd, struct ipc_resp *resp)
+{
+	ARG_UNUSED(cmd);
+	resp->value = 0xABCD;
+	LOG_INF("PING -> PONG");
+	return RESP_OK;
+}
+
+static int handle_led_set(const struct ipc_cmd *cmd, struct ipc_resp *resp)
+{
+	if (cmd->value != 0 && cmd->value != 1)
+		return RESP_ERR_VALUE;
+
+	gpio_pin_set_dt(&led, cmd->value);
+	resp->value = cmd->value;
+	LOG_INF("LED %s", cmd->value ? "ON" : "OFF");
+	return RESP_OK;
+}
+
+static int handle_led_get(const struct ipc_cmd *cmd, struct ipc_resp *resp)
+{
+	ARG_UNUSED(cmd);
+	resp->value = gpio_pin_get_dt(&led);
+	LOG_INF("LED durumu: %d", resp->value);
+	return RESP_OK;
+}
+
+/* ---------------- Komut tablosu ---------------- */
+
+struct cmd_entry {
+	uint8_t type;
+	int (*handler)(const struct ipc_cmd *cmd, struct ipc_resp *resp);
+};
+
+static const struct cmd_entry cmd_table[] = {
+	{ CMD_PING,    handle_ping    },
+	{ CMD_LED_SET, handle_led_set },
+	{ CMD_LED_GET, handle_led_get },
+};
+
+static int dispatch(const struct ipc_cmd *cmd, struct ipc_resp *resp)
+{
+	resp->version = IPC_PROTO_VERSION;
+	resp->type    = cmd->type;
+	resp->value   = 0;
+
+	if (cmd->version != IPC_PROTO_VERSION) {
+		LOG_ERR("versiyon uyusmuyor: %u (beklenen %u)",
+			cmd->version, IPC_PROTO_VERSION);
+		return RESP_ERR_VER;
+	}
+
+	for (size_t i = 0; i < ARRAY_SIZE(cmd_table); i++) {
+		if (cmd_table[i].type == cmd->type)
+			return cmd_table[i].handler(cmd, resp);
+	}
+
+	LOG_ERR("bilinmeyen komut: 0x%02x", cmd->type);
+	return RESP_ERR_CMD;
+}
+
 static int rpmsg_recv_cs_callback(struct rpmsg_endpoint *ept, void *data,
 				  size_t len, uint32_t src, void *priv)
 {
-	char c = ((char *)data)[0];
+	struct ipc_cmd cmd;
+	struct ipc_resp resp;
 
-	if (c == '1' || c == 1) {
-		gpio_pin_set_dt(&led, 1);
-		LOG_INF("LED ON (rx 0x%02x)", c);
-	} else if (c == '0' || c == 0) {
-		gpio_pin_set_dt(&led, 0);
-		LOG_INF("LED OFF (rx 0x%02x)", c);
+	if (len < sizeof(cmd)) {
+		LOG_ERR("kisa paket: %u byte (beklenen %u)",
+			(unsigned int)len, (unsigned int)sizeof(cmd));
+		return RPMSG_SUCCESS;
 	}
 
-	memcpy(sc_msg.data, data, len);
-	sc_msg.len = len;
-	k_sem_give(&data_sc_sem);
+	memcpy(&cmd, data, sizeof(cmd));
+	resp.status = dispatch(&cmd, &resp);
+	rpmsg_send(ept, &resp, sizeof(resp));
 
 	return RPMSG_SUCCESS;
 }
@@ -172,18 +228,15 @@ int platform_init(void)
 		return -1;
 	}
 
-	/* declare shared memory region */
 	metal_io_init(shm_io, (void *)SHM_START_ADDR, &shm_physmap,
 		      SHM_SIZE, -1, 0, addr_translation_get_ops(shm_physmap));
 
-	/* declare resource table region */
 	rsc_table_get(&rsc_table, &rsc_size);
 	rsc_tab_physmap = (uintptr_t)rsc_table;
 
 	metal_io_init(rsc_io, rsc_table,
 		      &rsc_tab_physmap, rsc_size, -1, 0, NULL);
 
-	/* setup IPM */
 	if (!device_is_ready(ipm_handle)) {
 		LOG_ERR("IPM device is not ready");
 		return -1;
@@ -226,7 +279,6 @@ platform_create_rpmsg_vdev(unsigned int vdev_index,
 		return NULL;
 	}
 
-	/* wait master rpmsg init completion */
 	rproc_virtio_wait_remote_ready(vdev);
 
 	vring_rsc = rsc_table_get_vring0(rsc_table);
@@ -267,7 +319,6 @@ void app_rpmsg_client_sample(void *arg1, void *arg2, void *arg3)
 	ARG_UNUSED(arg2);
 	ARG_UNUSED(arg3);
 
-	unsigned int msg_cnt = 0;
 	int ret = 0;
 
 	k_sem_take(&data_sc_sem,  K_FOREVER);
@@ -279,20 +330,11 @@ void app_rpmsg_client_sample(void *arg1, void *arg2, void *arg3)
 			       rpmsg_recv_cs_callback, NULL);
 	if (ret) {
 		LOG_ERR("[Linux sample client] Could not create endpoint: %d", ret);
-		goto task_end;
+		return;
 	}
 
-	while (msg_cnt < 100) {
-		k_sem_take(&data_sc_sem,  K_FOREVER);
-		msg_cnt++;
-		LOG_INF("[Linux sample client] incoming msg %d: %.*s", msg_cnt, sc_msg.len,
-			(char *)sc_msg.data);
-		rpmsg_send(&sc_ept, sc_msg.data, sc_msg.len);
-	}
-	rpmsg_destroy_ept(&sc_ept);
-
-task_end:
-	LOG_INF("OpenAMP Linux sample client responder ended");
+	/* Endpoint kuruldu. Isler artik callback icinde donuyor. */
+	k_sleep(K_FOREVER);
 }
 
 void app_rpmsg_tty(void *arg1, void *arg2, void *arg3)
@@ -348,7 +390,6 @@ void rpmsg_mng_task(void *arg1, void *arg2, void *arg3)
 
 	LOG_INF("OpenAMP[remote] Linux responder demo started");
 
-	/* Initialize platform */
 	ret = platform_init();
 	if (ret) {
 		LOG_ERR("Failed to initialize platform");
@@ -368,7 +409,6 @@ void rpmsg_mng_task(void *arg1, void *arg2, void *arg3)
 	(void)shell_backend_rpmsg_init_transport(rpdev);
 #endif
 
-	/* start the rpmsg clients */
 	k_sem_give(&data_sc_sem);
 	k_sem_give(&data_tty_sem);
 
@@ -385,12 +425,14 @@ task_end:
 int main(void)
 {
 	LOG_INF("Starting application threads!");
+
 	if (gpio_is_ready_dt(&led)) {
 		gpio_pin_configure_dt(&led, GPIO_OUTPUT_INACTIVE);
 		LOG_INF("LED (GPIO6) hazir");
 	} else {
 		LOG_ERR("LED cihazi hazir DEGIL");
 	}
+
 	k_thread_create(&thread_mng_data, thread_mng_stack, APP_TASK_STACK_SIZE,
 			rpmsg_mng_task,
 			NULL, NULL, NULL, K_PRIO_COOP(8), 0, K_NO_WAIT);

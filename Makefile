@@ -11,7 +11,9 @@ sync:
 	cp -f zephyr_app/prj.conf $(ZEPHYR_APP)/
 	cp -f zephyr_app/src/main_remote.c $(ZEPHYR_APP)/src/
 	cp -f zephyr_app/boards/*.overlay $(ZEPHYR_APP)/boards/
+	cp -f ipc_proto.h $(ZEPHYR_APP)/src/
 	@echo "--> kaynak senkronize edildi"
+	
 
 build: sync
 	cd $(ZEPHYR_DIR) && west build -p always -b $(BOARD) $(ZEPHYR_APP)
@@ -22,7 +24,7 @@ fw: build
 	@echo "--> firmware yuklendi"
 
 client:
-	gcc -o /tmp/led_ctrl led_ctrl.c
+	gcc -I. -o /tmp/led_ctrl led_ctrl.c
 	scp /tmp/led_ctrl $(KART_USER)@$(KART_IP):~/
 	@echo "--> led_ctrl yuklendi"
 
