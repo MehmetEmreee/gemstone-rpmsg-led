@@ -599,4 +599,4 @@ Beklenen boot çıktısı:
 | Temel alınan örnek | `zephyr/samples/subsys/ipc/openamp_rsc_table` |
 | TI MCU+ SDK (kavramsal) | [J722S API guide](https://software-dl.ti.com/jacinto7/esd/processor-sdk-rtos-j722s/) |
 
-> Bu proje, [Zephyr'i R5 çekirdeğinde çalıştırma](#) çalışmasının devamıdır. Orada Zephyr remoteproc3 üzerinde bağımsız koşuyordu (hello_world, jitter demosu); burada Linux ile **çift yönlü haberleşme** kuruldu.
+> Bu proje, [Zephyr'i R5 çekirdeğinde çalıştırma](https://github.com/MehmetEmreee/zephyr-t3gemstone-o1-r5f) çalışmasının devamıdır. Orada Zephyr remoteproc3 üzerinde bağımsız koşuyordu (hello_world, jitter demosu); burada Linux ile **çift yönlü haberleşme** kuruldu.
