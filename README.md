@@ -113,11 +113,11 @@ Mailbox burada önemli bir rol oynuyor: R5, belleği sürekli yoklamak yerine ya
 
 > **Uyarı:** `dmesg` çıktısında `virtio0: rpmsg host is online` satırını görmek yanıltıcı olabilir; o satır remoteproc2'ye (MCU-R5) ait ve sistem açıldığından beri orada. Bizim kanalımız virtio1.
 
-### TI MCU+ SDK ile İlişkisi
+### TI MCU + SDK ile İlişkisi
 
 TI'ın MCU+ SDK dokümantasyonu, FreeRTOS/NORTOS üzerine kurulu kendi IPC yığınını anlatıyor. Bizim R5 tarafında Zephyr çalıştığı için o API'ler burada birebir kullanılmıyor; köprü, iki tarafın da ortak konuştuğu RPMsg/virtio protokolü üzerinden kuruluyor. Kavramlar yine de birebir örtüşüyor:
 
-| TI MCU+ SDK | Buradaki karşılığı |
+| TI MCU + SDK | Buradaki karşılığı |
 |---|---|
 | IPC Notify | Mailbox (`mbox3`) |
 | IPC RPMessage | RPMsg endpoint |
@@ -287,11 +287,11 @@ struct ipc_resp {         /* R5 → Linux */
 
 | Kod | Komut | `value` | Açıklama |
 |---|---|---|---|
-| `0x00` | `CMD_PING` | — | → `0xABCD` |
+| `0x00` | `CMD_PING` | — | `0xABCD` |
 | `0x01` | `CMD_LED_SET` | 0/1 | LED |
-| `0x02` | `CMD_LED_GET` | — | Durum |
-| `0x10` | `CMD_MOTOR_STEP` | ±adım | 4096 = 1 tur, bloklamaz |
-| `0x11` | `CMD_MOTOR_STOP` | — | |
+| `0x02` | `CMD_LED_GET` | — |  LED Durum |
+| `0x10` | `CMD_MOTOR_STEP` | ±adım | 4096 = 1 tur |
+| `0x11` | `CMD_MOTOR_STOP` | — | Step motoru durdur |
 | `0x12` | `CMD_MOTOR_GET` | — | Step motor pozisyonu |
 | `0x13` | `CMD_MOTOR_SPD` | µs | Adım arası süresi, 1000–100000 |
 | `0x20` | `CMD_SERVO_SET` | 0–180 | Derece |
@@ -367,7 +367,7 @@ static const struct cmd_entry cmd_table[] = {
 | `CONFIG_PINCTRL=y` | Yoksa overlay'deki `pinctrl-0` sessizce yok sayılır; konsol "LED ON" der ama LED yanmaz |
 | `CONFIG_LOG_BACKEND_UART=y` | `CONFIG_UART_CONSOLE=y` sadece `printk` çıktısını yönlendirir; `LOG_INF` için ayrı backend gerekir |
 | `CONFIG_SHELL=n` | Orijinal örnek konsolu RPMsg'e bağlar; RPMsg açılamazsa firmware tamamen sessiz kalır |
-| `CONFIG_SYS_CLOCK_TICKS_PER_SEC=10000` | Servo pals periyodunun düzgün olması için gerekli (aşağıdaki tick tuzağına bakın) |
+| `CONFIG_SYS_CLOCK_TICKS_PER_SEC=10000` | Servo pulse periyodunun düzgün olması için gerekli (aşağıdaki tick tuzağına bakın) |
 | `CONFIG_GPIO=y` | GPIO sürücüsü için |
 
 Öte yandan iki ayardan uzak durun: `CONFIG_LOG_MODE_MINIMAL` log backend'ini devre dışı bıraktığı için tüm çıktıyı kaybettiriyor; `CONFIG_OPENAMP_WITH_DCACHE=y` ise bu SoC'te hiçbir etki göstermiyor (ayrıntısı aşağıda).
